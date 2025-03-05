@@ -34,11 +34,11 @@ class Unit(pygame.sprite.Sprite):
         
         # State flags
         self.selected = False
-        self.moved = False
-        self.attacked = False
+        self.is_moved = False
+        self.is_attacked = False
         
     def move(self, target_x, target_y):
-        if not self.moved:
+        if not self.is_moved:
             dx = target_x - self.rect.x
             dy = target_y - self.rect.y
             distance = (dx ** 2 + dy ** 2) ** 0.5
@@ -46,12 +46,12 @@ class Unit(pygame.sprite.Sprite):
             if distance <= self.movement_range * 32:  # 32 pixels per tile
                 self.rect.x = target_x
                 self.rect.y = target_y
-                self.moved = True
+                self.is_moved = True
                 return True
         return False
         
     def attack_unit(self, target):
-        if not self.attacked and not self.moved:
+        if not self.is_attacked:
             # Calculate distance
             dx = target.rect.x - self.rect.x
             dy = target.rect.y - self.rect.y
@@ -62,13 +62,13 @@ class Unit(pygame.sprite.Sprite):
             if distance <= attack_range:
                 damage = max(0, self.attack - target.defense)
                 target.health -= damage
-                self.attacked = True
+                self.is_attacked = True
                 return damage
         return 0
         
     def reset_turn(self):
-        self.moved = False
-        self.attacked = False
+        self.is_moved = False
+        self.is_attacked = False
         
     def is_alive(self):
         return self.health > 0
