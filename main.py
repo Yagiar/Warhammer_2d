@@ -373,7 +373,44 @@ class GameState:
     
     def start_game(self):
         if self.state == "setup":
-            # Calculate maximum units bot can afford
+            # Бросок кубика для Player 1
+            p1_roll = random.randint(1, 6)
+            
+            # Бросок кубика для Player 2 (Bot)
+            p2_roll = random.randint(1, 6)
+            
+            # Логирование результатов броска
+            if self.action_menu:
+                self.action_menu.add_to_log("🎲 Определение первого хода:")
+                self.action_menu.add_to_log(f"Player 1 бросает кубик: {p1_roll}")
+                self.action_menu.add_to_log(f"Player 2 (Bot) бросает кубик: {p2_roll}")
+            
+            # Обработка ничьей - повторный бросок
+            while p1_roll == p2_roll:
+                if self.action_menu:
+                    self.action_menu.add_to_log("🔄 Ничья! Перебрасываем кубики.")
+                
+                p1_roll = random.randint(1, 6)
+                p2_roll = random.randint(1, 6)
+                
+                if self.action_menu:
+                    self.action_menu.add_to_log(f"Player 1 перебрасывает: {p1_roll}")
+                    self.action_menu.add_to_log(f"Player 2 (Bot) перебрасывает: {p2_roll}")
+            
+            # Определение первого хода
+            if p1_roll > p2_roll:
+                self.state = "player1_turn"
+                first_player = "Player 1"
+            else:
+                self.state = "player2_turn"
+                first_player = "Player 2 (Bot)"
+            
+            # Финальное логирование результата
+            if self.action_menu:
+                self.action_menu.add_to_log(f"🏁 Первым ходит {first_player}!")
+                self.action_menu.add_to_log(f"Результат: Player 1 ({p1_roll}) vs Player 2 ({p2_roll})")
+            
+            # Стратегическое размещение юнитов бота
             bot_resources = self.other_faction.resources
             unit_costs = {
                 "warrior": 100,
@@ -381,46 +418,49 @@ class GameState:
                 "knight": 200
             }
             
-            # Strategic unit composition
+            # Стратегическая композиция отрядов
             desired_composition = [
                 ("warrior", 0.4),  # 40% warriors
                 ("archer", 0.3),   # 30% archers
                 ("knight", 0.3)    # 30% knights
             ]
             
-            # Calculate how many units of each type to create
+            # Расчет максимального количества юнитов
             total_possible_units = bot_resources // min(unit_costs.values())
             planned_units = []
+            
             for unit_type, ratio in desired_composition:
                 count = int(total_possible_units * ratio)
                 cost = count * unit_costs[unit_type]
+                
                 while cost > bot_resources:
                     count -= 1
                     cost = count * unit_costs[unit_type]
+                
                 for _ in range(count):
                     if bot_resources >= unit_costs[unit_type]:
                         planned_units.append(unit_type)
                         bot_resources -= unit_costs[unit_type]
             
-            # Place units strategically
+            # Размещение юнитов в зоне бота
             zone = self.setup_zones["faction2"]
             zone_width = zone[1] - zone[0]
             zone_height = len(self.grid)
             
-            # Strategic positions for different unit types
+            # Стратегические позиции для разных типов юнитов
             positions = {
                 "warrior": [(x, y) for x in range(zone[0], zone[0] + 2) 
-                          for y in range(zone_height)],  # Front line
+                          for y in range(zone_height)],  # Передний край
                 "archer": [(x, y) for x in range(zone[0] + 2, zone[1]) 
-                          for y in range(zone_height)],  # Back line
+                          for y in range(zone_height)],  # Задний край
                 "knight": [(x, y) for x in range(zone[0], zone[1]) 
-                          for y in range(zone_height)]   # Flexible positioning
+                          for y in range(zone_height)]   # Гибкое размещение
             }
             
-            # Place each planned unit
+            # Размещение каждого запланированного юнита
             for unit_type in planned_units:
                 preferred_positions = positions[unit_type]
-                random.shuffle(preferred_positions)  # Randomize positions within strategic zones
+                random.shuffle(preferred_positions)  # Рандомизация позиций
                 
                 for grid_x, grid_y in preferred_positions:
                     if self.is_valid_setup_position("faction2", grid_x, grid_y):
@@ -435,9 +475,8 @@ class GameState:
                                 self.action_menu.add_to_log(f"Bot разместил {unit_type}")
                             break
             
-            self.state = "player1_turn"
-            if self.action_menu:
-                self.action_menu.add_to_log("Игра началась! Ваш ход")
+            # Запуск фаз хода
+            self.run_turn_phases()
     
     def draw(self):
         # Fill background
@@ -640,7 +679,7 @@ class GameState:
                             grid_x = target.rect.x // self.grid_size
                             grid_y = target.rect.y // self.grid_size
                             self.grid[grid_y][grid_x] = None
-                            target.faction.remove_unit(target)
+                            self.other_faction.remove_unit(target)
                             if self.action_menu:
                                 self.action_menu.add_to_log(f"{target.unit_type} был уничтожен")
                 
@@ -713,6 +752,135 @@ class GameState:
         
         # End bot's turn
         self.end_turn()
+
+    def run_turn_phases(self):
+        # 6 фаз хода с броском кубика
+        phases = [
+            "Движение", 
+            "Магия", 
+            "Стрельба", 
+            "Ближний бой", 
+            "Морал", 
+            "Командование"
+        ]
+        
+        for phase_index, phase_name in enumerate(phases, 1):
+            # Бросок кубика для определения характеристик фазы
+            dice_roll = random.randint(1, 6)
+            
+            # Модификаторы для каждой фазы
+            phase_modifiers = {
+                1: self.modify_movement,     # Движение
+                2: self.modify_magic,        # Магия
+                3: self.modify_shooting,     # Стрельба
+                4: self.modify_melee_combat, # Ближний бой
+                5: self.modify_morale,       # Морал
+                6: self.modify_command       # Командование
+            }
+            
+            # Применение модификатора фазы
+            modifier_func = phase_modifiers.get(phase_index, lambda x: x)
+            modified_roll = modifier_func(dice_roll)
+            
+            # Логирование результатов
+            if self.action_menu:
+                self.action_menu.add_to_log(
+                    f"Фаза {phase_index} ({phase_name}): "
+                    f"Бросок кубика = {dice_roll}, "
+                    f"Модифицированный бросок = {modified_roll}"
+                )
+    
+    def modify_movement(self, dice_roll):
+        # Влияние броска на движение юнитов
+        movement_bonus = {
+            1: -1,  # Замедление
+            2: -0.5,
+            3: 0,   # Без изменений
+            4: 0.5, # Небольшое ускорение
+            5: 1,   # Значительное ускорение
+            6: 1.5  # Максимальное ускорение
+        }
+        
+        for unit in self.current_faction.units:
+            unit.movement_range = max(1, int(unit.movement_range * (1 + movement_bonus.get(dice_roll, 0))))
+        
+        return dice_roll
+    
+    def modify_magic(self, dice_roll):
+        # Влияние броска на магические способности
+        magic_bonus = {
+            1: 0,   # Нет магии
+            2: 0.2, # Слабая магия
+            3: 0.4,
+            4: 0.6,
+            5: 0.8,
+            6: 1.0  # Полная магическая мощь
+        }
+        
+        # Здесь можно добавить логику магических способностей
+        return dice_roll
+    
+    def modify_shooting(self, dice_roll):
+        # Влияние броска на стрельбу
+        shooting_bonus = {
+            1: 0,   # Промах
+            2: 0.2, # Слабая точность
+            3: 0.4,
+            4: 0.6,
+            5: 0.8,
+            6: 1.0  # Идеальная точность
+        }
+        
+        for unit in self.current_faction.units:
+            if unit.unit_type == "archer":
+                unit.attack *= (1 + shooting_bonus.get(dice_roll, 0))
+        
+        return dice_roll
+    
+    def modify_melee_combat(self, dice_roll):
+        # Влияние броска на ближний бой
+        melee_bonus = {
+            1: 0,   # Полный провал
+            2: 0.2, # Слабая атака
+            3: 0.4,
+            4: 0.6,
+            5: 0.8,
+            6: 1.0  # Мощная атака
+        }
+        
+        for unit in self.current_faction.units:
+            if unit.unit_type in ["warrior", "knight"]:
+                unit.attack *= (1 + melee_bonus.get(dice_roll, 0))
+        
+        return dice_roll
+    
+    def modify_morale(self, dice_roll):
+        # Влияние броска на мораль
+        morale_bonus = {
+            1: -1.0,  # Полный упадок духа
+            2: -0.5,
+            3: 0,     # Без изменений
+            4: 0.5,   # Небольшой подъем духа
+            5: 0.75,
+            6: 1.0    # Максимальный боевой дух
+        }
+        
+        # Здесь можно добавить логику влияния на боевой дух
+        return dice_roll
+    
+    def modify_command(self, dice_roll):
+        # Влияние броска на командование
+        command_bonus = {
+            1: 0,   # Полный хаос
+            2: 0.2, # Слабое управление
+            3: 0.4,
+            4: 0.6,
+            5: 0.8,
+            6: 1.0  # Идеальное управление
+        }
+        
+        # Здесь можно добавить логику влияния на командование
+        return dice_roll
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)

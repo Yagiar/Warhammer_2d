@@ -3,78 +3,36 @@ from pygame.locals import *
 import random
 
 class Unit(pygame.sprite.Sprite):
-    def __init__(self, x, y, faction, unit_type):
+    def __init__(self, x, y, unit_type, faction):
         super().__init__()
-        self.image = pygame.Surface((30, 30))
-        self.faction = faction
-        # Different colors for different factions
-        self.color = (255, 0, 0) if faction == "faction1" else (0, 0, 255)
-        self.image.fill(self.color)
-        self.rect = self.image.get_rect()
-        self.rect.x = x
-        self.rect.y = y
-        
-        # Unit characteristics based on type
+        self.rect = pygame.Rect(x, y, 32, 32)
         self.unit_type = unit_type
-        self.health = 100
-        
-        if unit_type == "warrior":
-            self.attack = random.randint(15, 25)
-            self.defense = random.randint(10, 15)
-            self.movement_range = 4
-        elif unit_type == "archer":
-            self.attack = random.randint(20, 30)
-            self.defense = random.randint(5, 10)
-            self.movement_range = 3
-            self.attack_range = 4
-        else:  # knight
-            self.attack = random.randint(25, 35)
-            self.defense = random.randint(15, 20)
-            self.movement_range = 5
-        
-        # State flags
+        self.faction = faction
         self.selected = False
         self.is_moved = False
         self.is_attacked = False
         
-    def move(self, target_x, target_y):
-        if not self.is_moved:
-            dx = target_x - self.rect.x
-            dy = target_y - self.rect.y
-            distance = (dx ** 2 + dy ** 2) ** 0.5
-            
-            if distance <= self.movement_range * 32:  # 32 pixels per tile
-                self.rect.x = target_x
-                self.rect.y = target_y
-                self.is_moved = True
-                return True
-        return False
+        # Базовые характеристики по типу юнита
+        unit_stats = {
+            "warrior": {"health": 100, "attack": 20, "defense": 15, "movement_range": 2},
+            "archer": {"health": 80, "attack": 15, "defense": 10, "movement_range": 3},
+            "knight": {"health": 120, "attack": 25, "defense": 20, "movement_range": 1}
+        }
         
-    def attack_unit(self, target):
-        if not self.is_attacked:
-            # Calculate distance
-            dx = target.rect.x - self.rect.x
-            dy = target.rect.y - self.rect.y
-            distance = (dx ** 2 + dy ** 2) ** 0.5
-            
-            # Check if target is in range
-            attack_range = getattr(self, 'attack_range', 1) * 32
-            if distance <= attack_range:
-                damage = max(0, self.attack - target.defense)
-                target.health -= damage
-                self.is_attacked = True
-                return damage
-        return 0
+        stats = unit_stats.get(unit_type, {})
+        self.health = stats.get("health", 100)
+        self.attack = stats.get("attack", 20)
+        self.defense = stats.get("defense", 15)
+        self.movement_range = stats.get("movement_range", 2)
+        self.attack_range = 1  # Базовая дальность атаки
         
-    def reset_turn(self):
-        self.is_moved = False
-        self.is_attacked = False
-        
-    def is_alive(self):
-        return self.health > 0
+        # Different colors for different factions
+        self.color = (255, 0, 0) if faction == "faction1" else (0, 0, 255)
+        self.image = pygame.Surface((30, 30))
+        self.image.fill(self.color)
         
     def draw(self, surface):
-        # Draw unit
+        # Простая отрисовка юнита
         pygame.draw.rect(surface, self.color, self.rect)
         
         # Draw selection highlight
@@ -92,4 +50,61 @@ class Unit(pygame.sprite.Sprite):
             "knight": (255, 215, 0)
         }
         type_rect = pygame.Rect(self.rect.x + 12, self.rect.y + 12, 6, 6)
-        pygame.draw.rect(surface, type_colors[self.unit_type], type_rect) 
+        pygame.draw.rect(surface, type_colors[self.unit_type], type_rect)
+        
+    def move(self, new_x, new_y):
+        # Проверка дистанции перемещения
+        dx = abs(new_x - self.rect.x) // 32
+        dy = abs(new_y - self.rect.y) // 32
+        
+        if dx * dx + dy * dy <= self.movement_range * self.movement_range:
+            self.rect.x = new_x
+            self.rect.y = new_y
+            return True
+        return False
+    
+    def attack_unit(self, target):
+        # Расчет урона с учетом защиты
+        damage = max(0, self.attack - target.defense // 2)
+        target.health = max(0, target.health - damage)
+        return damage
+    
+    def is_alive(self):
+        return self.health > 0
+
+class Squad:
+    def __init__(self, name, unit_type, units, faction):
+        self.name = name
+        self.unit_type = unit_type
+        self.units = units
+        self.faction = faction
+        self.is_moved = False
+        self.is_attacked = False
+    
+    def add_unit(self, unit):
+        if unit.unit_type == self.unit_type:
+            self.units.append(unit)
+    
+    def remove_unit(self, unit):
+        if unit in self.units:
+            self.units.remove(unit)
+    
+    def is_alive(self):
+        return any(unit.is_alive() for unit in self.units)
+    
+    def get_total_health(self):
+        return sum(unit.health for unit in self.units)
+    
+    def get_total_attack(self):
+        return sum(unit.attack for unit in self.units)
+    
+    def get_total_defense(self):
+        return sum(unit.defense for unit in self.units)
+
+    def reset_turn(self):
+        self.is_moved = False
+        self.is_attacked = False
+        
+    def draw(self, surface):
+        for unit in self.units:
+            unit.draw(surface) 
