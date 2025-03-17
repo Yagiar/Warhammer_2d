@@ -6,6 +6,7 @@ from PySide6.QtCore import Qt, QTimer
 import pygame
 from faction import Faction
 import random
+import time
 
 class GameWidget(QWidget):
     def __init__(self):
@@ -55,6 +56,7 @@ class ActionMenu(QWidget):
         state_layout = QVBoxLayout()
         self.turn_label = QLabel("Current Turn: Player 1")
         self.state_label = QLabel("State: Setup")
+        self.phase_label = QLabel("Phase: -")
         self.help_label = QLabel("Разместите юнитов в красной зоне,\nзатем нажмите 'Start Game'")
         self.help_label.setStyleSheet("color: #666;")
         self.resources_label = QLabel("Your Resources: 1000")
@@ -64,6 +66,7 @@ class ActionMenu(QWidget):
         self.start_game_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; padding: 5px; }")
         state_layout.addWidget(self.turn_label)
         state_layout.addWidget(self.state_label)
+        state_layout.addWidget(self.phase_label)
         state_layout.addWidget(self.help_label)
         state_layout.addWidget(self.resources_label)
         state_layout.addWidget(self.enemy_resources_label)
@@ -85,13 +88,16 @@ class ActionMenu(QWidget):
         self.move_btn = QPushButton("Move")
         self.attack_btn = QPushButton("Attack")
         self.end_turn_btn = QPushButton("End Turn")
+        self.roll_dice_btn = QPushButton("Roll Dice")
         
         self.move_btn.clicked.connect(self.handle_move)
         self.attack_btn.clicked.connect(self.handle_attack)
         self.end_turn_btn.clicked.connect(self.handle_end_turn)
+        self.roll_dice_btn.clicked.connect(self.handle_roll_dice)
         
         action_layout.addWidget(self.move_btn)
         action_layout.addWidget(self.attack_btn)
+        action_layout.addWidget(self.roll_dice_btn)
         action_layout.addWidget(self.end_turn_btn)
         action_group.setLayout(action_layout)
         
@@ -123,15 +129,24 @@ class ActionMenu(QWidget):
     
     def update_button_states(self):
         game_state = self.game_widget.game_state
+        
+        # Update button states based on game state
+        is_player_turn = game_state.state == "player1_turn"
         is_setup = game_state.state == "setup"
         is_game_over = game_state.state == "game_over"
         
-        # Enable/disable buttons based on game state
-        self.move_btn.setEnabled(not is_setup and not is_game_over)
-        self.attack_btn.setEnabled(not is_setup and not is_game_over)
-        self.end_turn_btn.setEnabled(not is_setup and not is_game_over)
-        self.start_game_btn.setEnabled(is_setup)
         self.unit_combo.setEnabled(is_setup)
+        self.start_game_btn.setEnabled(is_setup)
+        
+        # Action buttons are only enabled during player's turn
+        self.move_btn.setEnabled(is_player_turn and (game_state.selected_unit is not None) and (not game_state.selected_unit.is_moved))
+        self.attack_btn.setEnabled(is_player_turn and (game_state.selected_unit is not None) and (not game_state.selected_unit.is_attacked))
+        self.end_turn_btn.setEnabled(is_player_turn and not is_setup and not is_game_over)
+        
+        # Roll dice button is only enabled during player's turn and in the correct phase
+        self.roll_dice_btn.setEnabled(is_player_turn and 
+                                     game_state.current_phase is not None and 
+                                     not game_state.phase_roll_complete)
     
     def handle_move(self):
         self.game_widget.game_state.set_action("move")
@@ -152,6 +167,24 @@ class ActionMenu(QWidget):
         self.add_to_log("Игра началась!")
         self.game_widget.update()
     
+    def handle_roll_dice(self):
+        if self.game_widget and self.game_widget.game_state:
+            self.game_widget.game_state.roll_dice_for_phase()
+            self.game_widget.update()
+            self.update_button_states()
+            self.update_info()
+            
+            # Проверка, находимся ли мы в фазе Morale для игрока - если да, то сразу переходим к следующей фазе
+            if (self.game_widget.game_state.current_phase == "Morale" and 
+                self.game_widget.game_state.state == "player1_turn" and 
+                self.game_widget.game_state.phase_roll_complete):
+                # Задержка для показа результата броска кубика
+                time.sleep(1)
+                self.game_widget.game_state.proceed_to_next_phase()
+                self.game_widget.update()
+                self.update_button_states()
+                self.update_info()
+    
     def add_to_log(self, message):
         self.action_log.append(message)
         self.action_log.verticalScrollBar().setValue(
@@ -159,41 +192,44 @@ class ActionMenu(QWidget):
         )
     
     def update_info(self):
-        game_state = self.game_widget.game_state
-        
-        # Update turn indicator
-        current_player = "Player 1" if game_state.current_faction.name == "faction1" else "Bot"
-        self.turn_label.setText(f"Current Turn: {current_player}")
-        
-        # Update help text based on state
-        if game_state.state == "setup":
-            self.help_label.setText("Разместите юнитов в красной зоне,\nзатем нажмите 'Start Game'")
-        elif game_state.state == "player1_turn":
-            if not game_state.selected_unit and not game_state.current_action:
-                self.help_label.setText("Выберите юнита для действия")
-            elif game_state.selected_unit and not game_state.current_action:
-                self.help_label.setText("Нажмите 'Move' для перемещения\nили 'Attack' для атаки")
-            elif game_state.current_action == "move":
-                self.help_label.setText("Кликните куда переместить юнита")
-            elif game_state.current_action == "attack":
-                self.help_label.setText("Кликните по вражескому юниту для атаки")
-        else:
-            self.help_label.setText("")
-        
-        # Update state and resources
-        self.state_label.setText(f"State: {game_state.state}")
-        self.resources_label.setText(f"Your Resources: {game_state.current_faction.resources}")
-        self.enemy_resources_label.setText(f"Enemy Resources: {game_state.other_faction.resources}")
-        
-        if game_state.selected_unit:
-            unit = game_state.selected_unit
-            info = f"Type: {unit.unit_type}\n"
-            info += f"Health: {unit.health}\n"
-            info += f"Attack: {unit.attack}\n"
-            info += f"Defense: {unit.defense}"
-            self.unit_info_label.setText(info)
-        else:
-            self.unit_info_label.setText("No unit selected")
+        if self.game_widget and self.game_widget.game_state:
+            game_state = self.game_widget.game_state
+            
+            # Update state info
+            if game_state.state == "setup":
+                state_text = "Setup"
+            elif game_state.state == "player1_turn":
+                state_text = "Player's Turn"
+            elif game_state.state == "player2_turn":
+                state_text = "Bot's Turn"
+            elif game_state.state == "game_over":
+                state_text = "Game Over"
+            else:
+                state_text = game_state.state
+            
+            self.state_label.setText(f"State: {state_text}")
+            
+            # Update phase info
+            if game_state.current_phase:
+                self.phase_label.setText(f"Phase: {game_state.current_phase}")
+            else:
+                self.phase_label.setText("Phase: -")
+            
+            # Update resources info
+            player_resources = game_state.player_faction.resources
+            bot_resources = game_state.bot_faction.resources
+            self.resources_label.setText(f"Your Resources: {player_resources}")
+            self.enemy_resources_label.setText(f"Enemy Resources: {bot_resources}")
+            
+            if game_state.selected_unit:
+                unit = game_state.selected_unit
+                info = f"Type: {unit.unit_type}\n"
+                info += f"Health: {unit.health}\n"
+                info += f"Attack: {unit.attack}\n"
+                info += f"Defense: {unit.defense}"
+                self.unit_info_label.setText(info)
+            else:
+                self.unit_info_label.setText("No unit selected")
         
         # Update button states
         self.update_button_states()
@@ -234,26 +270,53 @@ class MainWindow(QMainWindow):
 class GameState:
     def __init__(self, surface):
         self.surface = surface
-        self.state = "setup"
-        self.current_faction = Faction("faction1")
-        self.other_faction = Faction("faction2")
+        self.player_faction = Faction("faction1")
+        self.bot_faction = Faction("faction2")
+        self.current_faction = self.player_faction
+        self.other_faction = self.bot_faction
+        self.state = "setup"  # setup, player1_turn, player2_turn, game_over
         self.selected_unit = None
-        self.current_action = None
+        self.current_action = None  # move, attack
+        self.action_menu = None
         self.grid_size = 32
+        
+        # Инициализация сетки
         self.grid = [[None for _ in range(surface.get_width() // self.grid_size)]
                     for _ in range(surface.get_height() // self.grid_size)]
+        
+        # Turn phases
+        self.phases = ["Movement", "Attack", "Morale"]
+        self.current_phase = None
+        self.current_phase_index = -1
+        self.phase_roll_complete = False
+        self.dice_roll = None
+        
         self.setup_zones = {
             "faction1": (0, self.surface.get_width() // self.grid_size // 3),
             "faction2": (2 * self.surface.get_width() // self.grid_size // 3, 
                         self.surface.get_width() // self.grid_size)
         }
-        self.action_menu = None  # Will be set from outside
     
     def set_action_menu(self, menu):
         self.action_menu = menu
     
     def set_action(self, action):
         self.current_action = action
+        
+        # Проверяем соответствие между действием и текущей фазой
+        if action == "move" and self.current_phase != "Movement":
+            if self.action_menu:
+                self.action_menu.add_to_log("⚠️ В текущей фазе движение недоступно!")
+            self.current_action = None
+            return
+            
+        if action == "attack" and self.current_phase != "Attack":
+            if self.action_menu:
+                self.action_menu.add_to_log("⚠️ В текущей фазе атака недоступна!")
+            self.current_action = None
+            return
+        
+        # Если действие не соответствует текущей фазе, сбрасываем выбор юнита
         if action != "move" and action != "attack":
             self.selected_unit = None
     
@@ -290,56 +353,119 @@ class GameState:
                     self.action_menu.add_to_log(f"Размещен {unit_type}")
     
     def handle_turn(self, grid_x, grid_y):
-        clicked_unit = self.grid[grid_y][grid_x]
-        current_player = "Player 1" if self.current_faction.name == "faction1" else "Bot"
+        # Check if we're selecting a unit
+        clicked_unit = None
         
-        # If no action is selected, select unit
-        if not self.current_action:
-            if clicked_unit and clicked_unit in self.current_faction.units:
+        # Проверяем, что игра находится в фазе хода игрока
+        if self.state == "player1_turn":
+            # Находим юнит по клику
+            for unit in self.current_faction.units:
+                if unit.rect.collidepoint(grid_x * self.grid_size, grid_y * self.grid_size):
+                    clicked_unit = unit
+                    break
+            
+            # Если мы собираемся двигать выбранный юнит
+            if self.current_action == "move" and self.selected_unit and not self.selected_unit.is_moved and self.current_phase == "Movement" and self.phase_roll_complete:
+                # Проверяем, что клик в пустую клетку
+                if not clicked_unit:
+                    # Calculate distance to make sure it's within movement range
+                    dx = abs(grid_x * self.grid_size - self.selected_unit.rect.x) // self.grid_size
+                    dy = abs(grid_y * self.grid_size - self.selected_unit.rect.y) // self.grid_size
+                    distance = (dx ** 2 + dy ** 2) ** 0.5  # Euclidean distance
+                    
+                    if distance <= self.selected_unit.movement_range:
+                        # Проверка на пустую клетку
+                        if self.grid[grid_y][grid_x] is None:
+                            # Move the unit
+                            old_x = self.selected_unit.rect.x // self.grid_size
+                            old_y = self.selected_unit.rect.y // self.grid_size
+                            
+                            # Обновляем позицию на игровом поле
+                            move_successful = self.selected_unit.move(grid_x * self.grid_size, grid_y * self.grid_size)
+                            if move_successful:
+                                # Обновляем сетку
+                                self.grid[old_y][old_x] = None
+                                self.grid[grid_y][grid_x] = self.selected_unit
+                                self.selected_unit.is_moved = True
+                                self.current_action = None
+                                
+                                if self.action_menu:
+                                    self.action_menu.add_to_log(f"Unit moved to ({grid_x}, {grid_y})")
+                                    self.action_menu.update_button_states()
+                                
+                                # Переходим к следующей фазе автоматически
+                                self.proceed_to_next_phase()
+            
+            # Если мы собираемся атаковать выбранным юнитом
+            elif self.current_action == "attack" and self.selected_unit and not self.selected_unit.is_attacked and self.current_phase == "Attack" and self.phase_roll_complete:
+                # Находим вражеский юнит для атаки
+                enemy_unit = None
+                for unit in self.other_faction.units:
+                    if unit.rect.collidepoint(grid_x * self.grid_size, grid_y * self.grid_size):
+                        enemy_unit = unit
+                        break
+                
+                if enemy_unit:
+                    # Calculate distance to check if in range
+                    dx = abs(enemy_unit.rect.x - self.selected_unit.rect.x) // self.grid_size
+                    dy = abs(enemy_unit.rect.y - self.selected_unit.rect.y) // self.grid_size
+                    distance = dx + dy  # Manhattan distance
+                    
+                    if distance <= self.selected_unit.attack_range:
+                        # Perform attack
+                        damage = self.selected_unit.attack_unit(enemy_unit)
+                        self.selected_unit.is_attacked = True
+                        self.current_action = None
+                        
+                        if self.action_menu:
+                            self.action_menu.add_to_log(f"Атака нанесла {damage} урона!")
+                            self.action_menu.update_button_states()
+                        
+                        # Check if target was destroyed
+                        if enemy_unit.health <= 0:
+                            # Очищаем клетку
+                            enemy_grid_x = enemy_unit.rect.x // self.grid_size
+                            enemy_grid_y = enemy_unit.rect.y // self.grid_size
+                            self.grid[enemy_grid_y][enemy_grid_x] = None
+                            
+                            self.other_faction.remove_unit(enemy_unit)
+                            if self.action_menu:
+                                self.action_menu.add_to_log(f"❌ Юнит противника уничтожен!")
+                                
+                            # Check victory condition
+                            if not self.other_faction.has_units():
+                                self.state = "game_over"
+                                if self.action_menu:
+                                    self.action_menu.add_to_log("Игра окончена! Победитель: Player 1")
+                                return
+                                
+                        # Переходим к следующей фазе автоматически
+                        self.proceed_to_next_phase()
+                        
+            # Фаза Morale - игрок просто должен бросить кубик
+            elif self.current_phase == "Morale" and self.phase_roll_complete:
+                # Автоматически переходим к следующей фазе (конец хода)
+                self.proceed_to_next_phase()
+            
+            # Если мы просто выбираем юнита (или отменяем выбор)
+            elif clicked_unit:
+                # Выбор/отмена выбора юнита
                 if self.selected_unit:
                     self.selected_unit.selected = False
-                self.selected_unit = clicked_unit
-                clicked_unit.selected = True
-                if self.action_menu:
-                    self.action_menu.add_to_log(f"{current_player} выбрал {clicked_unit.unit_type}")
-                    # Update button states based on unit's action flags
-                    self.action_menu.move_btn.setEnabled(not clicked_unit.is_moved)
-                    self.action_menu.attack_btn.setEnabled(not clicked_unit.is_attacked)
-        
-        # Handle move action
-        elif self.current_action == "move" and self.selected_unit and not self.selected_unit.is_moved:
-            if not clicked_unit:  # Moving to empty space
-                if self.selected_unit.move(grid_x * self.grid_size, 
-                                         grid_y * self.grid_size):
-                    old_x = self.selected_unit.rect.x // self.grid_size
-                    old_y = self.selected_unit.rect.y // self.grid_size
-                    self.grid[old_y][old_x] = None
-                    self.grid[grid_y][grid_x] = self.selected_unit
-                    if self.action_menu:
-                        self.action_menu.add_to_log(f"{current_player} переместил {self.selected_unit.unit_type}")
+                
+                if self.selected_unit == clicked_unit:
+                    # Отменяем выбор того же юнита
+                    self.selected_unit = None
                     self.current_action = None
-                    self.selected_unit.is_moved = True
-                    # Update button states
-                    self.action_menu.move_btn.setEnabled(False)
-        
-        # Handle attack action
-        elif self.current_action == "attack" and self.selected_unit and not self.selected_unit.is_attacked:
-            if clicked_unit and clicked_unit in self.other_faction.units:
-                damage = self.selected_unit.attack_unit(clicked_unit)
-                if damage > 0:
-                    if self.action_menu:
-                        self.action_menu.add_to_log(
-                            f"{current_player} атаковал {clicked_unit.unit_type} и нанес {damage} урона"
-                        )
-                    if not clicked_unit.is_alive():
-                        self.grid[grid_y][grid_x] = None
-                        clicked_unit.faction.remove_unit(clicked_unit)
-                        if self.action_menu:
-                            self.action_menu.add_to_log(f"{clicked_unit.unit_type} был уничтожен")
+                else:
+                    # Выбираем нового юнита
+                    self.selected_unit = clicked_unit
+                    self.selected_unit.selected = True
                     self.current_action = None
-                    self.selected_unit.is_attacked = True
-                    # Update button states
-                    self.action_menu.attack_btn.setEnabled(False)
+                    
+                    if self.action_menu:
+                        self.action_menu.add_to_log(f"Выбран юнит: {self.selected_unit.unit_type}")
+                        self.action_menu.update_button_states()
     
     def end_turn(self):
         if self.state in ["player1_turn", "player2_turn"]:
@@ -348,6 +474,10 @@ class GameState:
                 self.selected_unit = None
             
             self.current_action = None
+            self.current_phase = None
+            self.current_phase_index = -1
+            self.phase_roll_complete = False
+            
             self.current_faction, self.other_faction = self.other_faction, self.current_faction
             
             # Reset all action flags for the new current faction's units
@@ -366,7 +496,10 @@ class GameState:
                 if self.action_menu:
                     next_player = "Bot" if self.state == "player2_turn" else "Player 1"
                     self.action_menu.add_to_log(f"Ход перешел к {next_player}")
-                    
+                
+                # Start phases for the new turn
+                self.start_turn_phases()
+                
                 # If it's bot's turn, make a move
                 if self.state == "player2_turn":
                     self.make_bot_move()
@@ -401,82 +534,60 @@ class GameState:
             if p1_roll > p2_roll:
                 self.state = "player1_turn"
                 first_player = "Player 1"
+                self.current_faction = self.player_faction
+                self.other_faction = self.bot_faction
             else:
                 self.state = "player2_turn"
                 first_player = "Player 2 (Bot)"
+                self.current_faction = self.bot_faction
+                self.other_faction = self.player_faction
             
             # Финальное логирование результата
             if self.action_menu:
                 self.action_menu.add_to_log(f"🏁 Первым ходит {first_player}!")
                 self.action_menu.add_to_log(f"Результат: Player 1 ({p1_roll}) vs Player 2 ({p2_roll})")
+                # Автоматическое размещение юнитов бота, если их ещё нет, с более рандомным размещением по полю
+                if not self.bot_faction.units:
+                    bot_resources = self.bot_faction.resources
+                    unit_costs = {"warrior": 100, "archer": 150, "knight": 200}
+                    desired_composition = [("warrior", 0.4), ("archer", 0.3), ("knight", 0.3)]
+                    total_possible_units = bot_resources // min(unit_costs.values())
+                    planned_units = []
+                    for unit_type, ratio in desired_composition:
+                        count = int(total_possible_units * ratio)
+                        cost = count * unit_costs[unit_type]
+                        while count > 0 and cost > bot_resources:
+                            count -= 1
+                            cost = count * unit_costs[unit_type]
+                        for _ in range(count):
+                            if bot_resources >= unit_costs[unit_type]:
+                                planned_units.append(unit_type)
+                                bot_resources -= unit_costs[unit_type]
+                    zone = self.setup_zones["faction2"]
+                    zone_start, zone_end = zone[0], zone[1]
+                    rows = len(self.grid)
+                    for unit_type in planned_units:
+                        placed = False
+                        attempts = 0
+                        max_attempts = 100
+                        while not placed and attempts < max_attempts:
+                            rand_row = random.randint(0, rows - 1)
+                            rand_col = random.randint(zone_start, zone_end - 1)
+                            if self.grid[rand_row][rand_col] is None:
+                                unit = self.bot_faction.add_unit(rand_col * self.grid_size, rand_row * self.grid_size, unit_type)
+                                if unit:
+                                    self.grid[rand_row][rand_col] = unit
+                                    if self.action_menu:
+                                        self.action_menu.add_to_log(f"Размещен бот: {unit_type} в ({rand_col}, {rand_row})")
+                                    placed = True
+                            attempts += 1
             
-            # Стратегическое размещение юнитов бота
-            bot_resources = self.other_faction.resources
-            unit_costs = {
-                "warrior": 100,
-                "archer": 150,
-                "knight": 200
-            }
+            # Start the first turn with phases
+            self.start_turn_phases()
             
-            # Стратегическая композиция отрядов
-            desired_composition = [
-                ("warrior", 0.4),  # 40% warriors
-                ("archer", 0.3),   # 30% archers
-                ("knight", 0.3)    # 30% knights
-            ]
-            
-            # Расчет максимального количества юнитов
-            total_possible_units = bot_resources // min(unit_costs.values())
-            planned_units = []
-            
-            for unit_type, ratio in desired_composition:
-                count = int(total_possible_units * ratio)
-                cost = count * unit_costs[unit_type]
-                
-                while cost > bot_resources:
-                    count -= 1
-                    cost = count * unit_costs[unit_type]
-                
-                for _ in range(count):
-                    if bot_resources >= unit_costs[unit_type]:
-                        planned_units.append(unit_type)
-                        bot_resources -= unit_costs[unit_type]
-            
-            # Размещение юнитов в зоне бота
-            zone = self.setup_zones["faction2"]
-            zone_width = zone[1] - zone[0]
-            zone_height = len(self.grid)
-            
-            # Стратегические позиции для разных типов юнитов
-            positions = {
-                "warrior": [(x, y) for x in range(zone[0], zone[0] + 2) 
-                          for y in range(zone_height)],  # Передний край
-                "archer": [(x, y) for x in range(zone[0] + 2, zone[1]) 
-                          for y in range(zone_height)],  # Задний край
-                "knight": [(x, y) for x in range(zone[0], zone[1]) 
-                          for y in range(zone_height)]   # Гибкое размещение
-            }
-            
-            # Размещение каждого запланированного юнита
-            for unit_type in planned_units:
-                preferred_positions = positions[unit_type]
-                random.shuffle(preferred_positions)  # Рандомизация позиций
-                
-                for grid_x, grid_y in preferred_positions:
-                    if self.is_valid_setup_position("faction2", grid_x, grid_y):
-                        unit = self.other_faction.add_unit(
-                            grid_x * self.grid_size,
-                            grid_y * self.grid_size,
-                            unit_type
-                        )
-                        if unit:
-                            self.grid[grid_y][grid_x] = unit
-                            if self.action_menu:
-                                self.action_menu.add_to_log(f"Bot разместил {unit_type}")
-                            break
-            
-            # Запуск фаз хода
-            self.run_turn_phases()
+            # If bot goes first, make its move
+            if self.state == "player2_turn":
+                self.make_bot_move()
     
     def draw(self):
         # Fill background
@@ -614,273 +725,433 @@ class GameState:
                             pygame.draw.rect(self.surface, (255, 0, 0), rect, 2)
 
     def make_bot_move(self):
-        # Analyze game state
-        bot_units = self.current_faction.units
-        enemy_units = self.other_faction.units
-        
-        # Calculate unit type counts and health status
-        bot_unit_types = {}
-        bot_total_health = 0
-        for unit in bot_units:
-            bot_unit_types[unit.unit_type] = bot_unit_types.get(unit.unit_type, 0) + 1
-            bot_total_health += unit.health
-        
-        enemy_unit_types = {}
-        enemy_total_health = 0
-        for unit in enemy_units:
-            enemy_unit_types[unit.unit_type] = enemy_unit_types.get(unit.unit_type, 0) + 1
-            enemy_total_health += unit.health
-        
-        # Determine battle strategy based on analysis
-        aggressive = bot_total_health > enemy_total_health
-        has_ranged = bot_unit_types.get("archer", 0) > 0
-        
-        # Process each bot unit with strategic priorities
-        for bot_unit in self.current_faction.units:
-            bot_unit.selected = False
+        # Bot's turn logic
+        if self.state == "player2_turn":
+            self.action_menu.add_to_log("Ход бота...")
             
-            # Analyze potential targets
-            targets = []
-            for enemy_unit in enemy_units:
-                dx = (enemy_unit.rect.x - bot_unit.rect.x) // self.grid_size
-                dy = (enemy_unit.rect.y - bot_unit.rect.y) // self.grid_size
-                distance = dx * dx + dy * dy
-                
-                # Calculate target priority based on multiple factors
-                priority = 0
-                # Prioritize low health targets
-                priority += (100 - enemy_unit.health) * 0.5
-                # Prioritize threatening units
-                if enemy_unit.unit_type == "archer" and bot_unit.unit_type == "warrior":
-                    priority += 30
-                elif enemy_unit.unit_type == "knight":
-                    priority += 20
-                # Distance factor (closer targets get higher priority)
-                priority += 100 / (distance + 1)
-                
-                targets.append((enemy_unit, distance, priority))
+            # Вначале бросаем кубик для фазы, если ещё не бросали
+            if self.current_phase and not self.phase_roll_complete:
+                self.action_menu.add_to_log(f"Бросаем кубик для фазы {self.current_phase}")
+                self.roll_dice_for_phase()
+                time.sleep(0.5)  # Небольшая пауза после броска
             
-            # Sort targets by priority
-            targets.sort(key=lambda x: x[2], reverse=True)
-            
-            if targets:
-                target, distance, _ = targets[0]
-                attack_range = getattr(bot_unit, 'attack_range', 1)
+            # Bot only processes the current phase if roll is complete
+            if self.current_phase and self.phase_roll_complete:
+                # Get player units for targeting
+                player_units = self.player_faction.units
                 
-                # If target is in attack range, attack
-                if distance <= attack_range * attack_range:
-                    damage = bot_unit.attack_unit(target)
-                    if damage > 0:
+                self.action_menu.add_to_log(f"Бот обрабатывает фазу: {self.current_phase}")
+                
+                # Find available units for the current phase
+                if self.current_phase == "Movement":
+                    available_units = [unit for unit in self.bot_faction.units if not unit.is_moved]
+                    if self.action_menu:
+                        if available_units:
+                            self.action_menu.add_to_log(f"Доступно {len(available_units)} юнитов для движения")
+                        else:
+                            self.action_menu.add_to_log("Нет доступных юнитов для движения")
+                elif self.current_phase == "Attack":
+                    available_units = [unit for unit in self.bot_faction.units if not unit.is_attacked]
+                    if self.action_menu:
+                        if available_units:
+                            self.action_menu.add_to_log(f"Доступно {len(available_units)} юнитов для атаки")
+                        else:
+                            self.action_menu.add_to_log("Нет доступных юнитов для атаки")
+                else:  # Morale phase
+                    available_units = self.bot_faction.units
+                    if self.action_menu:
+                        self.action_menu.add_to_log(f"Фаза морали: {len(available_units)} юнитов")
+                
+                # Если есть доступные юниты для текущей фазы
+                if available_units:
+                    # Select the best unit for the current phase
+                    if self.current_phase == "Movement":
+                        bot_unit = max(available_units, key=lambda unit: unit.movement_range + (50 if unit.unit_type == "archer" else 0))
                         if self.action_menu:
-                            self.action_menu.add_to_log(
-                                f"Bot атаковал {target.unit_type} (HP: {target.health}) и нанес {damage} урона"
-                            )
-                        if not target.is_alive():
-                            grid_x = target.rect.x // self.grid_size
-                            grid_y = target.rect.y // self.grid_size
-                            self.grid[grid_y][grid_x] = None
-                            self.other_faction.remove_unit(target)
+                            self.action_menu.add_to_log(f"Движение: выбран {bot_unit.unit_type} с рейтингом {bot_unit.movement_range}")
+                    elif self.current_phase == "Attack":
+                        bot_unit = max(available_units, key=lambda unit: unit.attack)
+                        if self.action_menu:
+                            self.action_menu.add_to_log(f"Атака: выбран {bot_unit.unit_type} с атакой {bot_unit.attack}")
+                    else:  # Morale phase
+                        bot_unit = max(available_units, key=lambda unit: unit.defense)
+                        if self.action_menu:
+                            self.action_menu.add_to_log(f"Мораль: выбран {bot_unit.unit_type} с защитой {bot_unit.defense}")
+                    
+                    # Select the unit
+                    if self.selected_unit:
+                        self.selected_unit.selected = False
+                    self.selected_unit = bot_unit
+                    self.selected_unit.selected = True
+                    
+                    # Process the phase
+                    if self.current_phase == "Movement" and not bot_unit.is_moved:
+                        if self.action_menu:
+                            self.action_menu.add_to_log(f"Вызываем процесс движения для {bot_unit.unit_type}")
+                        # Показываем позицию юнита до перемещения
+                        pos_x = bot_unit.rect.x // self.grid_size
+                        pos_y = bot_unit.rect.y // self.grid_size
+                        if self.action_menu:
+                            self.action_menu.add_to_log(f"Юнит находится в позиции ({pos_x}, {pos_y})")
+                        
+                        self.process_bot_movement(bot_unit, player_units)
+                        
+                        # Показываем, изменилась ли позиция юнита
+                        new_x = bot_unit.rect.x // self.grid_size
+                        new_y = bot_unit.rect.y // self.grid_size
+                        if new_x != pos_x or new_y != pos_y:
                             if self.action_menu:
-                                self.action_menu.add_to_log(f"{target.unit_type} был уничтожен")
+                                self.action_menu.add_to_log(f"Юнит переместился в новую позицию ({new_x}, {new_y})")
+                        else:
+                            if self.action_menu:
+                                self.action_menu.add_to_log(f"Юнит остался на месте ({new_x}, {new_y})")
+                    
+                    elif self.current_phase == "Attack" and not bot_unit.is_attacked:
+                        if self.action_menu:
+                            self.action_menu.add_to_log(f"Вызываем процесс атаки для {bot_unit.unit_type}")
+                        self.process_bot_attack(bot_unit, player_units)
+                    
+                    elif self.current_phase == "Morale":
+                        if self.action_menu:
+                            self.action_menu.add_to_log("Фаза морали - просто переходим дальше")
+                else:
+                    if self.action_menu:
+                        self.action_menu.add_to_log(f"Нет доступных юнитов для фазы {self.current_phase}, пропускаем")
                 
-                # If target is not in range and unit hasn't moved, plan movement
-                elif not bot_unit.is_moved:
-                    current_x = bot_unit.rect.x // self.grid_size
-                    current_y = bot_unit.rect.y // self.grid_size
-                    target_x = target.rect.x // self.grid_size
-                    target_y = target.rect.y // self.grid_size
-                    
-                    # Calculate optimal movement based on unit type and strategy
-                    best_move = None
-                    best_score = float('-inf')
-                    
-                    for dx in range(-bot_unit.movement_range, bot_unit.movement_range + 1):
-                        for dy in range(-bot_unit.movement_range, bot_unit.movement_range + 1):
-                            if dx * dx + dy * dy <= bot_unit.movement_range * bot_unit.movement_range:
-                                new_x = current_x + dx
-                                new_y = current_y + dy
-                                
-                                if (0 <= new_x < len(self.grid[0]) and 
-                                    0 <= new_y < len(self.grid) and 
-                                    not self.grid[new_y][new_x]):
-                                    
-                                    # Calculate move score based on multiple factors
-                                    score = 0
-                                    new_distance = (new_x - target_x) ** 2 + (new_y - target_y) ** 2
-                                    
-                                    # Distance factor
-                                    score -= new_distance
-                                    
-                                    # Strategic positioning
-                                    if bot_unit.unit_type == "archer":
-                                        # Archers prefer to keep distance
-                                        if new_distance >= 4:  # Minimum safe distance
-                                            score += 50
-                                    elif bot_unit.unit_type == "warrior":
-                                        # Warriors want to get close
-                                        if new_distance <= 2:
-                                            score += 50
-                                    elif bot_unit.unit_type == "knight":
-                                        # Knights are flexible but prefer medium range
-                                        if 2 <= new_distance <= 4:
-                                            score += 30
-                                    
-                                    # Avoid clustering with friendly units
-                                    for friendly in bot_units:
-                                        if friendly != bot_unit:
-                                            fx = friendly.rect.x // self.grid_size
-                                            fy = friendly.rect.y // self.grid_size
-                                            if abs(new_x - fx) + abs(new_y - fy) <= 1:
-                                                score -= 20
-                                    
-                                    if score > best_score:
-                                        best_score = score
-                                        best_move = (new_x, new_y)
-                    
-                    # Execute the best move
-                    if best_move:
-                        new_x, new_y = best_move
-                        if bot_unit.move(new_x * self.grid_size, new_y * self.grid_size):
-                            old_x = current_x
-                            old_y = current_y
-                            self.grid[old_y][old_x] = None
-                            self.grid[new_y][new_x] = bot_unit
-                            if self.action_menu:
-                                self.action_menu.add_to_log(
-                                    f"Bot переместил {bot_unit.unit_type} в стратегическую позицию"
-                                )
-        
-        # End bot's turn
-        self.end_turn()
-
-    def run_turn_phases(self):
-        # 6 фаз хода с броском кубика
-        phases = [
-            "Движение", 
-            "Магия", 
-            "Стрельба", 
-            "Ближний бой", 
-            "Морал", 
-            "Командование"
-        ]
-        
-        for phase_index, phase_name in enumerate(phases, 1):
-            # Бросок кубика для определения характеристик фазы
-            dice_roll = random.randint(1, 6)
+                # Wait a moment to show the action
+                time.sleep(0.5)
+                
+                # Proceed to the next phase
+                if self.action_menu:
+                    self.action_menu.add_to_log("Переходим к следующей фазе")
+                self.proceed_to_next_phase()
             
-            # Модификаторы для каждой фазы
-            phase_modifiers = {
-                1: self.modify_movement,     # Движение
-                2: self.modify_magic,        # Магия
-                3: self.modify_shooting,     # Стрельба
-                4: self.modify_melee_combat, # Ближний бой
-                5: self.modify_morale,       # Морал
-                6: self.modify_command       # Командование
-            }
-            
-            # Применение модификатора фазы
-            modifier_func = phase_modifiers.get(phase_index, lambda x: x)
-            modified_roll = modifier_func(dice_roll)
-            
-            # Логирование результатов
+            # Update UI
             if self.action_menu:
-                self.action_menu.add_to_log(
-                    f"Фаза {phase_index} ({phase_name}): "
-                    f"Бросок кубика = {dice_roll}, "
-                    f"Модифицированный бросок = {modified_roll}"
-                )
+                self.action_menu.update_button_states()
+                self.action_menu.update_info()
     
-    def modify_movement(self, dice_roll):
-        # Влияние броска на движение юнитов
-        movement_bonus = {
-            1: -1,  # Замедление
-            2: -0.5,
-            3: 0,   # Без изменений
-            4: 0.5, # Небольшое ускорение
-            5: 1,   # Значительное ускорение
-            6: 1.5  # Максимальное ускорение
-        }
+    def process_bot_movement(self, bot_unit, player_units):
+        """Processes bot movement during its turn."""
+        if self.action_menu:
+            self.action_menu.add_to_log(f"Бот выполняет движение {bot_unit.unit_type}")
+            self.action_menu.add_to_log(f"Диапазон движения: {bot_unit.movement_range}")
+        
+        if not player_units:
+            if self.action_menu:
+                self.action_menu.add_to_log("Нет юнитов игрока для преследования")
+            bot_unit.is_moved = True
+            return
+
+        current_x = bot_unit.rect.x // self.grid_size
+        current_y = bot_unit.rect.y // self.grid_size
+
+        closest_enemy = min(player_units, key=lambda target: 
+            ((bot_unit.rect.x - target.rect.x) ** 2 + 
+            (bot_unit.rect.y - target.rect.y) ** 2) ** 0.5)
+
+        enemy_x = closest_enemy.rect.x // self.grid_size
+        enemy_y = closest_enemy.rect.y // self.grid_size
+
+        if self.action_menu:
+            self.action_menu.add_to_log(f"Бот в позиции ({current_x}, {current_y}), противник в ({enemy_x}, {enemy_y})")
+
+        # Гарантируем минимальный диапазон движения для бота
+        bot_unit.movement_range = max(2, bot_unit.movement_range)
+        
+        # Ищем все доступные ходы в пределах диапазона движения
+        valid_moves = []
+        for dx in range(-bot_unit.movement_range, bot_unit.movement_range + 1):
+            for dy in range(-bot_unit.movement_range, bot_unit.movement_range + 1):
+                test_x = current_x + dx
+                test_y = current_y + dy
+                
+                # Пропускаем текущую позицию
+                if dx == 0 and dy == 0:
+                    continue
+                    
+                # Проверяем, что расстояние находится в пределах диапазона движения
+                distance = ((dx ** 2 + dy ** 2) ** 0.5)
+                
+                # Проверяем, что позиция в пределах поля и свободна
+                if (distance <= bot_unit.movement_range and 
+                    0 <= test_x < len(self.grid[0]) and 
+                    0 <= test_y < len(self.grid) and 
+                    self.grid[test_y][test_x] is None):
+                    
+                    # Вычисляем расстояние до противника с этой новой позиции
+                    enemy_dist = ((test_x - enemy_x) ** 2 + (test_y - enemy_y) ** 2) ** 0.5
+                    valid_moves.append((test_x, test_y, enemy_dist))
+        
+        if self.action_menu:
+            self.action_menu.add_to_log(f"Найдено {len(valid_moves)} возможных ходов")
+        
+        # Сортируем ходы по расстоянию до противника (предпочитаем ближе)
+        valid_moves.sort(key=lambda move: move[2])
+        
+        # Выбираем лучший ход
+        new_x, new_y = current_x, current_y
+        if valid_moves:
+            new_x, new_y, _ = valid_moves[0]
+            if self.action_menu:
+                self.action_menu.add_to_log(f"Выбран ход в ({new_x}, {new_y})")
+        else:
+            if self.action_menu:
+                self.action_menu.add_to_log("Нет доступных ходов!")
+
+        # Перемещаем юнит, если найдена подходящая позиция
+        if new_x != current_x or new_y != current_y:
+            pixel_x = new_x * self.grid_size
+            pixel_y = new_y * self.grid_size
+            
+            if self.action_menu:
+                self.action_menu.add_to_log(f"Пытаемся переместить юнит в пиксели ({pixel_x}, {pixel_y})")
+            
+            # Перемещаем юнит
+            # Обновляем позицию напрямую для отладки
+            bot_unit.rect.x = pixel_x
+            bot_unit.rect.y = pixel_y
+            move_successful = True
+            
+            if move_successful:
+                # Обновляем сетку
+                self.grid[current_y][current_x] = None
+                self.grid[new_y][new_x] = bot_unit
+                bot_unit.is_moved = True
+                
+                if self.action_menu:
+                    self.action_menu.add_to_log(f"Бот переместил {bot_unit.unit_type} из ({current_x}, {current_y}) в ({new_x}, {new_y})")
+            else:
+                bot_unit.is_moved = True
+                if self.action_menu:
+                    self.action_menu.add_to_log("Перемещение не удалось")
+        else:
+            bot_unit.is_moved = True
+            if self.action_menu:
+                self.action_menu.add_to_log("Юнит остался на месте - нет валидных ходов")
+
+
+    
+    def process_bot_attack(self, bot_unit, player_units):
+        """Обрабатывает атаку выбранного юнита бота"""
+        if self.action_menu:
+            self.action_menu.add_to_log(f"Бот выполняет атаку {bot_unit.unit_type}")
+        
+        # Find enemy in range
+        in_range_enemies = []
+        for target in player_units:
+            dx = abs(bot_unit.rect.x - target.rect.x) // self.grid_size
+            dy = abs(bot_unit.rect.y - target.rect.y) // self.grid_size
+            dist = dx + dy  # Manhattan distance
+            
+            if dist <= bot_unit.attack_range:
+                in_range_enemies.append(target)
+        
+        if in_range_enemies:
+            # Attack the weakest enemy in range
+            target = min(in_range_enemies, key=lambda enemy: enemy.health)
+            damage = bot_unit.attack_unit(target)
+            bot_unit.is_attacked = True
+            
+            if self.action_menu:
+                self.action_menu.add_to_log(f"Бот атаковал {target.unit_type} и нанес {damage} урона!")
+            
+            # Check if target was destroyed
+            if target.health <= 0:
+                grid_x = target.rect.x // self.grid_size
+                grid_y = target.rect.y // self.grid_size
+                self.grid[grid_y][grid_x] = None  # Очищаем клетку
+                self.player_faction.remove_unit(target)
+                if self.action_menu:
+                    self.action_menu.add_to_log(f"❌ Юнит игрока {target.unit_type} уничтожен!")
+                    
+                # Check victory condition
+                if not self.player_faction.has_units():
+                    self.state = "game_over"
+                    if self.action_menu:
+                        self.action_menu.add_to_log("Игра окончена! Победитель: Bot")
+        else:
+            if self.action_menu:
+                self.action_menu.add_to_log("Нет целей в зоне досягаемости для атаки бота")
+            bot_unit.is_attacked = True  # Skip attack if no targets
+    
+    def roll_dice_for_phase(self):
+        if self.state in ["player1_turn", "player2_turn"] and self.current_phase is not None:
+            # Roll a dice (1-6)
+            self.dice_roll = random.randint(1, 6)
+            
+            if self.action_menu:
+                self.action_menu.add_to_log(f"🎲 {self.current_faction.name} выбросил {self.dice_roll} на фазе {self.current_phase}")
+            
+            # Apply phase effects based on dice roll
+            if self.current_phase == "Movement":
+                self.apply_movement_effects(self.dice_roll)
+            elif self.current_phase == "Attack":
+                self.apply_attack_effects(self.dice_roll)
+            elif self.current_phase == "Morale":
+                self.apply_morale_effects(self.dice_roll)
+            
+            self.phase_roll_complete = True
+            
+            # Move to the next phase if it's bot's turn
+            if self.state == "player2_turn":
+                self.proceed_to_next_phase()
+            
+            self.update_action_menu()
+    
+    def apply_movement_effects(self, dice_roll):
+        # Modifier based on dice roll
+        movement_modifier = max(-1, (dice_roll - 3) / 3)  # -1 to +1 range
         
         for unit in self.current_faction.units:
-            unit.movement_range = max(1, int(unit.movement_range * (1 + movement_bonus.get(dice_roll, 0))))
-        
-        return dice_roll
+            original_range = unit.movement_range
+            unit.movement_range = max(1, int(original_range * (1 + movement_modifier)))
+            
+        if self.action_menu:
+            if movement_modifier > 0:
+                self.action_menu.add_to_log(f"Удача! Движение улучшено на {movement_modifier:.1f}x")
+            elif movement_modifier < 0:
+                self.action_menu.add_to_log(f"Неудача! Движение снижено на {abs(movement_modifier):.1f}x")
+            else:
+                self.action_menu.add_to_log("Нейтральный бросок. Движение без изменений.")
+                
+        # Если ход бота, вызываем функцию движения бота с модификатором
+        if self.state == "player2_turn" and self.current_phase == "Movement":
+            if self.action_menu:
+                self.action_menu.add_to_log("Применяем модификатор движения для бота")
+            
+            # Находим доступные юниты для движения
+            available_units = [unit for unit in self.bot_faction.units if not unit.is_moved]
+            if available_units and len(self.player_faction.units) > 0:
+                # Находим юнит противника, который ближе всего к любому из наших юнитов
+                closest_enemy = None
+                closest_unit = None
+                min_distance = float('inf')
+                
+                for bot_unit in available_units:
+                    for player_unit in self.player_faction.units:
+                        distance = ((bot_unit.rect.x - player_unit.rect.x) ** 2 + 
+                                    (bot_unit.rect.y - player_unit.rect.y) ** 2) ** 0.5
+                        if distance < min_distance:
+                            min_distance = distance
+                            closest_enemy = player_unit
+                            closest_unit = bot_unit
+                
+                if closest_unit and closest_enemy:
+                    if self.action_menu:
+                        self.action_menu.add_to_log(f"Выбран {closest_unit.unit_type} для движения к {closest_enemy.unit_type}")
+                    self.process_bot_movement(closest_unit, [closest_enemy])
     
-    def modify_magic(self, dice_roll):
-        # Влияние броска на магические способности
-        magic_bonus = {
-            1: 0,   # Нет магии
-            2: 0.2, # Слабая магия
-            3: 0.4,
-            4: 0.6,
-            5: 0.8,
-            6: 1.0  # Полная магическая мощь
-        }
-        
-        # Здесь можно добавить логику магических способностей
-        return dice_roll
-    
-    def modify_shooting(self, dice_roll):
-        # Влияние броска на стрельбу
-        shooting_bonus = {
-            1: 0,   # Промах
-            2: 0.2, # Слабая точность
-            3: 0.4,
-            4: 0.6,
-            5: 0.8,
-            6: 1.0  # Идеальная точность
-        }
+    def apply_attack_effects(self, dice_roll):
+        # Modifier based on dice roll
+        attack_modifier = max(-0.5, (dice_roll - 3) / 6)  # -0.5 to +0.5 range
         
         for unit in self.current_faction.units:
-            if unit.unit_type == "archer":
-                unit.attack *= (1 + shooting_bonus.get(dice_roll, 0))
-        
-        return dice_roll
+            original_attack = unit.attack
+            unit.attack = max(5, int(original_attack * (1 + attack_modifier)))
+            
+        if self.action_menu:
+            if attack_modifier > 0:
+                self.action_menu.add_to_log(f"Удача! Атака улучшена на {attack_modifier:.1f}x")
+            elif attack_modifier < 0:
+                self.action_menu.add_to_log(f"Неудача! Атака снижена на {abs(attack_modifier):.1f}x")
+            else:
+                self.action_menu.add_to_log("Нейтральный бросок. Атака без изменений.")
+                
+        # Если ход бота, вызываем функцию атаки бота с модификатором
+        if self.state == "player2_turn" and self.current_phase == "Attack":
+            if self.action_menu:
+                self.action_menu.add_to_log("Применяем модификатор атаки для бота")
+            
+            # Находим доступные юниты для атаки
+            available_units = [unit for unit in self.bot_faction.units if not unit.is_attacked]
+            if available_units and len(self.player_faction.units) > 0:
+                # Выбираем юнит с наибольшей атакой
+                best_attack_unit = max(available_units, key=lambda unit: unit.attack)
+                
+                # Находим ближайшего противника к этому юниту
+                closest_enemies = []
+                for player_unit in self.player_faction.units:
+                    # Вычисляем расстояние в клетках
+                    dx = abs(best_attack_unit.rect.x - player_unit.rect.x) // self.grid_size
+                    dy = abs(best_attack_unit.rect.y - player_unit.rect.y) // self.grid_size
+                    dist = dx + dy  # Manhattan distance
+                    
+                    # Проверяем, находится ли противник в зоне атаки
+                    if dist <= best_attack_unit.attack_range:
+                        closest_enemies.append((player_unit, dist, player_unit.health))
+                
+                # Сортируем противников по здоровью (атакуем самых слабых)
+                closest_enemies.sort(key=lambda x: (x[1], x[2]))
+                
+                if closest_enemies:
+                    target_unit = closest_enemies[0][0]
+                    if self.action_menu:
+                        self.action_menu.add_to_log(f"Выбран {best_attack_unit.unit_type} для атаки {target_unit.unit_type}")
+                    self.process_bot_attack(best_attack_unit, [target_unit])
     
-    def modify_melee_combat(self, dice_roll):
-        # Влияние броска на ближний бой
-        melee_bonus = {
-            1: 0,   # Полный провал
-            2: 0.2, # Слабая атака
-            3: 0.4,
-            4: 0.6,
-            5: 0.8,
-            6: 1.0  # Мощная атака
-        }
+    def apply_morale_effects(self, dice_roll):
+        # Morale effects (for example, could affect defense)
+        morale_modifier = max(-0.3, (dice_roll - 3) / 10)  # -0.3 to +0.3 range
         
         for unit in self.current_faction.units:
-            if unit.unit_type in ["warrior", "knight"]:
-                unit.attack *= (1 + melee_bonus.get(dice_roll, 0))
-        
-        return dice_roll
+            original_defense = unit.defense
+            unit.defense = max(5, int(original_defense * (1 + morale_modifier)))
+            
+        if self.action_menu:
+            if morale_modifier > 0:
+                self.action_menu.add_to_log(f"Высокий боевой дух! Защита улучшена на {morale_modifier:.1f}x")
+            elif morale_modifier < 0:
+                self.action_menu.add_to_log(f"Низкий боевой дух! Защита снижена на {abs(morale_modifier):.1f}x")
+            else:
+                self.action_menu.add_to_log("Нейтральный боевой дух. Защита без изменений.")
     
-    def modify_morale(self, dice_roll):
-        # Влияние броска на мораль
-        morale_bonus = {
-            1: -1.0,  # Полный упадок духа
-            2: -0.5,
-            3: 0,     # Без изменений
-            4: 0.5,   # Небольшой подъем духа
-            5: 0.75,
-            6: 1.0    # Максимальный боевой дух
-        }
-        
-        # Здесь можно добавить логику влияния на боевой дух
-        return dice_roll
+    def start_turn_phases(self):
+        # Start with the first phase
+        self.current_phase_index = 0
+        if len(self.phases) > 0:
+            self.current_phase = self.phases[0]
+            self.phase_roll_complete = False
+            
+            if self.action_menu:
+                self.action_menu.add_to_log(f"Начинается фаза: {self.current_phase}")
+                self.action_menu.update_info()
+            
+            # If it's bot's turn, automatically roll dice
+            if self.state == "player2_turn":
+                self.roll_dice_for_phase()
     
-    def modify_command(self, dice_roll):
-        # Влияние броска на командование
-        command_bonus = {
-            1: 0,   # Полный хаос
-            2: 0.2, # Слабое управление
-            3: 0.4,
-            4: 0.6,
-            5: 0.8,
-            6: 1.0  # Идеальное управление
-        }
+    def proceed_to_next_phase(self):
+        # Move to the next phase
+        self.current_phase_index += 1
         
-        # Здесь можно добавить логику влияния на командование
-        return dice_roll
+        # Check if we've gone through all phases
+        if self.current_phase_index >= len(self.phases):
+            # End of all phases, end the turn
+            self.current_phase = None
+            self.current_phase_index = -1
+            
+            if self.action_menu:
+                self.action_menu.add_to_log("Все фазы завершены. Ход переходит к следующему игроку.")
+            
+            self.end_turn()
+        else:
+            # Move to the next phase
+            self.current_phase = self.phases[self.current_phase_index]
+            self.phase_roll_complete = False
+            
+            if self.action_menu:
+                self.action_menu.add_to_log(f"Начинается фаза: {self.current_phase}")
+                self.action_menu.update_info()
+            
+            # If it's bot's turn, automatically roll dice
+            if self.state == "player2_turn":
+                self.roll_dice_for_phase()
+    
+    def update_action_menu(self):
+        if self.action_menu:
+            self.action_menu.update_button_states()
+            self.action_menu.update_info()
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
