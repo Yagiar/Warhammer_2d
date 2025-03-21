@@ -972,7 +972,7 @@ class GameState:
                         self.action_menu.add_to_log("Игра окончена! Победитель: Bot")
         else:
             if self.action_menu:
-                self.action_menu.add_to_log("Нет целей в зоне досягаемости для атаки бота")
+                self.action_menu.add_to_log("🤖 Нет целей в зоне досягаемости для атаки бота")
             bot_unit.is_attacked = True  # Skip attack if no targets
     
     def roll_dice_for_phase(self):
