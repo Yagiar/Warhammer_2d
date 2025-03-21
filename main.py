@@ -76,12 +76,39 @@ class ActionMenu(QWidget):
         # Unit selection
         unit_group = QGroupBox("Unit Selection")
         unit_layout = QVBoxLayout()
-        self.unit_combo = QComboBox()
-        self.unit_combo.addItems(["Warrior", "Archer", "Knight"])
-        unit_layout.addWidget(QLabel("Select Unit Type:"))
-        unit_layout.addWidget(self.unit_combo)
-        unit_group.setLayout(unit_layout)
         
+        # Добавляем метку
+        unit_layout.addWidget(QLabel("Select Unit Type:"))
+        
+        # Инициализируем комбобокс
+        self.unit_combo = QComboBox()
+        
+        # Dynamically load unit types from game state's faction
+        available_units = self.game_widget.game_state.current_faction.get_available_unit_types()
+        for unit_data in available_units:
+            unit_type = unit_data['type']
+            cost = unit_data['cost']
+            self.unit_combo.addItem(f"{unit_type.capitalize()} ({cost})")
+        
+        # Добавляем горизонтальный контейнер для комбобокса и кнопки выбора
+        combo_layout = QHBoxLayout()
+        combo_layout.addWidget(self.unit_combo, 3)  # соотношение 3:1
+        
+        # Кнопка для подтверждения выбора юнита
+        self.select_unit_btn = QPushButton("Выбрать")
+        self.select_unit_btn.clicked.connect(self.handle_select_unit)
+        combo_layout.addWidget(self.select_unit_btn, 1)
+        
+        # Добавляем контейнер с комбобоксом и кнопкой
+        unit_layout.addLayout(combo_layout)
+        
+        # Add unit description label
+        self.unit_description = QLabel("Выберите тип юнита и нажмите 'Выбрать'")
+        self.unit_description.setWordWrap(True)
+        self.unit_description.setStyleSheet("color: #666; font-size: 10px;")
+        unit_layout.addWidget(self.unit_description)
+        
+        unit_group.setLayout(unit_layout)
         # Action buttons
         action_group = QGroupBox("Actions")
         action_layout = QVBoxLayout()
@@ -136,6 +163,7 @@ class ActionMenu(QWidget):
         is_game_over = game_state.state == "game_over"
         
         self.unit_combo.setEnabled(is_setup)
+        self.select_unit_btn.setEnabled(is_setup)
         self.start_game_btn.setEnabled(is_setup)
         
         # Action buttons are only enabled during player's turn
@@ -233,6 +261,42 @@ class ActionMenu(QWidget):
         
         # Update button states
         self.update_button_states()
+
+    def handle_select_unit(self):
+        """Обработчик нажатия кнопки выбора юнита"""
+        if self.unit_combo.count() > 0:
+            self.update_unit_description()
+            self.add_to_log(f"Выбран тип юнита: {self.unit_combo.currentText()}")
+    
+    def update_unit_description(self):
+        """Обновляет описание выбранного юнита"""
+        if self.unit_combo.count() > 0:
+            current_text = self.unit_combo.currentText()
+            unit_type = current_text.split(" (")[0].lower()
+            
+            # Получаем данные о юните из фракции
+            available_units = self.game_widget.game_state.current_faction.get_available_unit_types()
+            for unit_data in available_units:
+                if unit_data['type'].lower() == unit_type:
+                    description = unit_data.get('description', 'Нет описания')
+                    cost = unit_data.get('cost', 0)
+                    health = unit_data.get('health', 100)
+                    attack = unit_data.get('attack', 0)
+                    defense = unit_data.get('defense', 0)
+                    movement = unit_data.get('movement_range', 0)
+                    attack_range = unit_data.get('attack_range', 0)
+                    
+                    # Форматируем описание юнита
+                    formatted_desc = f"<b>{unit_type.capitalize()}</b> ({cost})<br>"
+                    formatted_desc += f"HP: {health} | ATK: {attack} | DEF: {defense}<br>"
+                    formatted_desc += f"Дальность: {movement} | Дист.атаки: {attack_range}"
+                    
+                    self.unit_description.setText(formatted_desc)
+                    self.unit_description.setTextFormat(Qt.RichText)
+                    return
+            
+            # Если данные не найдены
+            self.unit_description.setText(f"Нет данных о типе {unit_type}")
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -341,7 +405,10 @@ class GameState:
     def handle_setup(self, grid_x, grid_y):
         if self.is_valid_setup_position(self.current_faction.name, grid_x, grid_y):
             # Get selected unit type from UI
-            unit_type = self.action_menu.unit_combo.currentText().lower()
+            selected_text = self.action_menu.unit_combo.currentText().lower()
+            # Извлекаем только имя юнита, отбрасывая стоимость в скобках
+            unit_type = selected_text.split(" (")[0]
+            
             unit = self.current_faction.add_unit(
                 grid_x * self.grid_size,
                 grid_y * self.grid_size,

@@ -1,6 +1,7 @@
 import pygame
-from unit import Unit, Squad
+from unit import Unit, Squad, SQUAD_DATA
 import random
+import json
 
 class Faction:
     def __init__(self, name, resources=1000):
@@ -9,14 +10,17 @@ class Faction:
         self.units = []
         self.squads = []
         
-        # Стоимость юнитов
-        self.unit_costs = {
-            "warrior": 100,
-            "archer": 150,
-            "knight": 200
-        }
+        # Загружаем стоимость юнитов из внешнего файла
+        self.unit_costs = {}
+        for unit_type, data in SQUAD_DATA.items():
+            self.unit_costs[unit_type] = data.get('cost', 100)
     
     def create_squad(self, name, unit_type, num_units=1):
+        # Проверяем, существует ли такой тип юнита
+        if unit_type not in SQUAD_DATA:
+            print(f"Ошибка: тип юнита '{unit_type}' не найден в squads.json")
+            return None
+            
         # Проверка ресурсов
         unit_cost = self.unit_costs.get(unit_type, 100)
         total_cost = unit_cost * num_units
@@ -38,6 +42,11 @@ class Faction:
         return None
     
     def add_unit(self, x, y, unit_type):
+        # Проверяем, существует ли такой тип юнита
+        if unit_type not in SQUAD_DATA:
+            print(f"Ошибка: тип юнита '{unit_type}' не найден в squads.json")
+            return None
+            
         unit_cost = self.unit_costs.get(unit_type, 100)
         
         if unit_cost <= self.resources:
@@ -68,4 +77,18 @@ class Faction:
             unit.is_attacked = False
         
         for squad in self.squads:
-            squad.reset_turn() 
+            squad.reset_turn()
+            
+    def get_available_unit_types(self):
+        """Возвращает список доступных типов юнитов с их стоимостью"""
+        available_units = []
+        for unit_type, cost in self.unit_costs.items():
+            if cost <= self.resources:
+                unit_data = SQUAD_DATA.get(unit_type, {})
+                description = unit_data.get('description', '')
+                available_units.append({
+                    'type': unit_type,
+                    'cost': cost,
+                    'description': description
+                })
+        return available_units 
