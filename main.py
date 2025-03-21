@@ -1,12 +1,14 @@
 import sys
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, 
                              QHBoxLayout, QVBoxLayout, QPushButton, 
-                             QLabel, QGroupBox, QComboBox, QTextEdit)
+                             QLabel, QGroupBox, QComboBox, QTextEdit, QTextBrowser)
 from PySide6.QtCore import Qt, QTimer
 import pygame
 from faction import Faction
 import random
 import time
+import re
+from PySide6.QtGui import QTextCursor
 
 class GameWidget(QWidget):
     def __init__(self):
@@ -42,9 +44,10 @@ class GameWidget(QWidget):
             self.update()  # Trigger a repaint
 
 class ActionMenu(QWidget):
-    def __init__(self, game_widget):
+    def __init__(self, game_widget, units_list):
         super().__init__()
         self.game_widget = game_widget
+        self.units_list = units_list
         self.setup_ui()
         self.update_button_states()
         
@@ -109,6 +112,7 @@ class ActionMenu(QWidget):
         unit_layout.addWidget(self.unit_description)
         
         unit_group.setLayout(unit_layout)
+        
         # Action buttons
         action_group = QGroupBox("Actions")
         action_layout = QVBoxLayout()
@@ -152,7 +156,7 @@ class ActionMenu(QWidget):
         layout.addWidget(log_group)
         
         self.setLayout(layout)
-        self.setFixedWidth(250)
+        self.setFixedWidth(280)  # Немного увеличиваем ширину для сайдбара
     
     def update_button_states(self):
         game_state = self.game_widget.game_state
@@ -258,10 +262,84 @@ class ActionMenu(QWidget):
                 self.unit_info_label.setText(info)
             else:
                 self.unit_info_label.setText("No unit selected")
+            
+            # Обновляем список юнитов
+            self.update_units_list(game_state.player_faction.units)
         
         # Update button states
         self.update_button_states()
-
+    
+    def update_units_list(self, units):
+        """Обновляет список юнитов игрока в сайдбаре"""
+        self.units_list.clear()
+        
+        if not units:
+            self.units_list.setHtml("<i>У вас нет юнитов</i>")
+            return
+        
+        html = "<style>table {width: 100%; border-collapse: collapse;} td {padding: 2px;} .unit-row:hover {background-color: #f0f0f0; cursor: pointer;}</style>"
+        # Группируем юниты по типу
+        unit_types = {}
+        for unit in units:
+            if unit.unit_type not in unit_types:
+                unit_types[unit.unit_type] = []
+            unit_types[unit.unit_type].append(unit)
+        
+        # Отображаем юниты по типам
+        for unit_type, unit_list in unit_types.items():
+            html += f"<h3 style='margin: 5px 0px;'>{unit_type.capitalize()} ({len(unit_list)})</h3>"
+            
+            # Создаем таблицу для юнитов этого типа
+            html += "<table>"
+            for i, unit in enumerate(unit_list):
+                # Добавляем класс для строки, чтобы подсветить при наведении
+                row_class = " class='unit-row'"
+                
+                # Добавляем стиль для выбранного юнита
+                selected_style = ""
+                if unit.selected:
+                    selected_style = " style='background-color: #ffffc0;'"
+                
+                if unit.health <= 0:
+                    # Отображаем убитый юнит
+                    html += f"<tr{row_class}{selected_style}><td>#{i+1}</td><td colspan='2'><span style='color:red; font-weight:bold'>УБИТ</span></td></tr>"
+                else:
+                    # Цвет для здоровья
+                    health_color = self._get_health_color(unit.health)
+                    # Индикатор статуса (ходил/атаковал)
+                    status = []
+                    if unit.is_moved:
+                        status.append("<span style='color:orange'>◉ Ходил</span>")
+                    if unit.is_attacked:
+                        status.append("<span style='color:purple'>◉ Атаковал</span>")
+                    
+                    status_text = " ".join(status) if status else "<span style='color:green'>◉ Готов</span>"
+                    
+                    # Отображаем здоровье и атаку юнита
+                    html += f"<tr{row_class}{selected_style}><td>#{i+1}</td><td><b>HP:</b> <span style='color:{health_color}'>{unit.health}</span></td>"
+                    html += f"<td><b>ATK:</b> {unit.attack}</td></tr>"
+                    
+                    # Отображаем статус юнита
+                    html += f"<tr{row_class}{selected_style}><td></td><td colspan='2'>{status_text}</td></tr>"
+                    
+                    # Добавляем пустую строку для разделения юнитов
+                    html += f"<tr><td colspan='3'><hr style='border:none; height:1px; background-color:#eee'></td></tr>"
+            
+            html += "</table>"
+        
+        self.units_list.setHtml(html)
+    
+    def _get_health_color(self, health):
+        """Возвращает цвет для отображения здоровья"""
+        if health > 75:
+            return "green"
+        elif health > 50:
+            return "yellowgreen"
+        elif health > 25:
+            return "orange"
+        else:
+            return "red"
+    
     def handle_select_unit(self):
         """Обработчик нажатия кнопки выбора юнита"""
         if self.unit_combo.count() > 0:
@@ -301,33 +379,91 @@ class ActionMenu(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Warhammer 2D")
+        self.setWindowTitle("Warhammer 40k: Lite Edition")
         
-        # Create main widget and layout
+        # Создаем главный виджет и лейаут
         main_widget = QWidget()
-        layout = QHBoxLayout()
+        main_layout = QHBoxLayout()  # Горизонтальный лейаут для всего интерфейса
         
-        # Create game widget and action menu
+        # Создаем левую панель для списка юнитов
+        self.left_panel = QWidget()
+        left_layout = QVBoxLayout()
+        
+        # Заголовок для левой панели
+        left_layout.addWidget(QLabel("<h2>Ваши юниты</h2>"))
+        
+        # Создаем виджет для отображения списка юнитов
+        self.units_list = QTextBrowser()
+        self.units_list.setMinimumWidth(200)  # Устанавливаем фиксированную ширину
+        self.units_list.setHtml("<i>У вас нет юнитов</i>")
+        
+        # Подключаем обработчик клика по списку юнитов
+        self.units_list.mouseReleaseEvent = self.handle_units_list_click
+        
+        left_layout.addWidget(self.units_list)
+        self.left_panel.setLayout(left_layout)
+        
+        # Добавляем левую панель в главный лейаут
+        main_layout.addWidget(self.left_panel)
+        
+        # Создаем игровой виджет
         self.game_widget = GameWidget()
-        self.action_menu = ActionMenu(self.game_widget)
+        main_layout.addWidget(self.game_widget, 1)  # 1 = растягивать по доступному пространству
         
-        # Connect game state with action menu
-        self.game_widget.game_state.set_action_menu(self.action_menu)
+        # Создаем меню действий и передаем ему список юнитов
+        self.action_menu = ActionMenu(self.game_widget, self.units_list)
+        main_layout.addWidget(self.action_menu)
         
-        # Add widgets to layout
-        layout.addWidget(self.game_widget)
-        layout.addWidget(self.action_menu)
-        
-        # Set layout for main widget
-        main_widget.setLayout(layout)
+        # Устанавливаем лейаут для главного виджета
+        main_widget.setLayout(main_layout)
         self.setCentralWidget(main_widget)
         
-        # Setup update timer
+        # Устанавливаем размер окна
+        self.resize(1200, 800)
+        
+        # Связываем игровой виджет с меню действий
+        self.game_widget.action_menu = self.action_menu
+        # Связываем игровое состояние с меню действий
+        self.game_widget.game_state.set_action_menu(self.action_menu)
+        
+        # Настраиваем таймер обновления
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_game)
         self.timer.start(1000 // 60)  # 60 FPS
     
+    def handle_units_list_click(self, event):
+        """Обрабатывает клик по списку юнитов"""
+        # Получаем HTML под курсором
+        cursor = self.units_list.cursorForPosition(event.pos())
+        cursor.select(QTextCursor.LineUnderCursor)
+        line = cursor.selectedText()
+        
+        # Находим номер юнита в строке (формат: #1, #2, и т.д.)
+        match = re.search(r'#(\d+)', line)
+        if match:
+            unit_index = int(match.group(1)) - 1
+            if 0 <= unit_index < len(self.game_widget.game_state.player_faction.units):
+                # Сначала сбрасываем выделение у всех юнитов
+                for unit in self.game_widget.game_state.player_faction.units:
+                    unit.selected = False
+                
+                # Выделяем выбранный юнит
+                unit = self.game_widget.game_state.player_faction.units[unit_index]
+                if unit.health > 0:  # Только если юнит жив
+                    unit.selected = True
+                    self.game_widget.game_state.selected_unit = unit
+                    self.action_menu.add_to_log(f"Выбран {unit.unit_type} #{unit_index + 1}")
+                    
+                    # Обновляем информацию в интерфейсе
+                    self.action_menu.update_units_list(self.game_widget.game_state.player_faction.units)
+                    self.action_menu.update_button_states()
+                    self.game_widget.update()
+        
+        # Обрабатываем клик как обычно
+        super(QTextBrowser, self.units_list).mouseReleaseEvent(event)
+
     def update_game(self):
+        """Обновляет игровой интерфейс"""
         self.game_widget.update()
         self.action_menu.update_info()
 
@@ -418,6 +554,8 @@ class GameState:
                 self.grid[grid_y][grid_x] = unit
                 if self.action_menu:
                     self.action_menu.add_to_log(f"Размещен {unit_type}")
+                    # Обновляем список юнитов при размещении нового юнита
+                    self.action_menu.update_units_list(self.player_faction.units)
     
     def handle_turn(self, grid_x, grid_y):
         # Check if we're selecting a unit
@@ -509,6 +647,10 @@ class GameState:
                         # Переходим к следующей фазе автоматически
                         self.proceed_to_next_phase()
                         
+                        # Обновляем список юнитов после атаки
+                        if self.action_menu:
+                            self.action_menu.update_units_list(self.player_faction.units)
+            
             # Фаза Morale - игрок просто должен бросить кубик
             elif self.current_phase == "Morale" and self.phase_roll_complete:
                 # Автоматически переходим к следующей фазе (конец хода)
@@ -807,6 +949,12 @@ class GameState:
                 # Get player units for targeting
                 player_units = self.player_faction.units
                 
+                # Проверка, есть ли юниты у игрока
+                if not player_units:
+                    self.action_menu.add_to_log("У игрока нет юнитов. Пропускаем ход бота.")
+                    self.proceed_to_next_phase()
+                    return
+                
                 self.action_menu.add_to_log(f"Бот обрабатывает фазу: {self.current_phase}")
                 
                 # Find available units for the current phase
@@ -822,6 +970,9 @@ class GameState:
                     if self.action_menu:
                         if available_units:
                             self.action_menu.add_to_log(f"Доступно {len(available_units)} юнитов для атаки")
+                            # Проверяем параметры атаки у юнитов
+                            for unit in available_units:
+                                self.action_menu.add_to_log(f"{unit.unit_type}: атака={unit.attack}, дальность={unit.attack_range}")
                         else:
                             self.action_menu.add_to_log("Нет доступных юнитов для атаки")
                 else:  # Morale phase
@@ -876,6 +1027,15 @@ class GameState:
                     elif self.current_phase == "Attack" and not bot_unit.is_attacked:
                         if self.action_menu:
                             self.action_menu.add_to_log(f"Вызываем процесс атаки для {bot_unit.unit_type}")
+                            self.action_menu.add_to_log(f"Позиция атакующего: ({bot_unit.rect.x // self.grid_size}, {bot_unit.rect.y // self.grid_size})")
+                            
+                            # Проверяем расстояния до всех юнитов игрока
+                            for target in player_units:
+                                dx = abs(bot_unit.rect.x // self.grid_size - target.rect.x // self.grid_size)
+                                dy = abs(bot_unit.rect.y // self.grid_size - target.rect.y // self.grid_size)
+                                dist = dx + dy
+                                self.action_menu.add_to_log(f"Расстояние до {target.unit_type}: {dist} (нужно ≤{bot_unit.attack_range})")
+                        
                         self.process_bot_attack(bot_unit, player_units)
                     
                     elif self.current_phase == "Morale":
@@ -997,22 +1157,33 @@ class GameState:
             if self.action_menu:
                 self.action_menu.add_to_log("Юнит остался на месте - нет валидных ходов")
 
-
-    
     def process_bot_attack(self, bot_unit, player_units):
         """Обрабатывает атаку выбранного юнита бота"""
         if self.action_menu:
             self.action_menu.add_to_log(f"Бот выполняет атаку {bot_unit.unit_type}")
+            self.action_menu.add_to_log(f"Диапазон атаки: {bot_unit.attack_range}")
+            bot_x = bot_unit.rect.x // self.grid_size
+            bot_y = bot_unit.rect.y // self.grid_size
+            self.action_menu.add_to_log(f"Позиция бота: ({bot_x}, {bot_y})")
         
         # Find enemy in range
         in_range_enemies = []
         for target in player_units:
-            dx = abs(bot_unit.rect.x - target.rect.x) // self.grid_size
-            dy = abs(bot_unit.rect.y - target.rect.y) // self.grid_size
+            target_x = target.rect.x // self.grid_size
+            target_y = target.rect.y // self.grid_size
+            
+            # Расстояние в клетках (не в пикселях)
+            dx = abs(bot_x - target_x)
+            dy = abs(bot_y - target_y)
             dist = dx + dy  # Manhattan distance
+            
+            if self.action_menu:
+                self.action_menu.add_to_log(f"Проверяем {target.unit_type} в ({target_x}, {target_y}), расстояние: {dist}")
             
             if dist <= bot_unit.attack_range:
                 in_range_enemies.append(target)
+                if self.action_menu:
+                    self.action_menu.add_to_log(f"✓ {target.unit_type} в зоне досягаемости!")
         
         if in_range_enemies:
             # Attack the weakest enemy in range
@@ -1022,6 +1193,8 @@ class GameState:
             
             if self.action_menu:
                 self.action_menu.add_to_log(f"Бот атаковал {target.unit_type} и нанес {damage} урона!")
+                # Обновляем список юнитов игрока после атаки бота
+                self.action_menu.update_units_list(self.player_faction.units)
             
             # Check if target was destroyed
             if target.health <= 0:
@@ -1031,6 +1204,8 @@ class GameState:
                 self.player_faction.remove_unit(target)
                 if self.action_menu:
                     self.action_menu.add_to_log(f"❌ Юнит игрока {target.unit_type} уничтожен!")
+                    # Обновляем список юнитов после уничтожения
+                    self.action_menu.update_units_list(self.player_faction.units)
                     
                 # Check victory condition
                 if not self.player_faction.has_units():
@@ -1132,30 +1307,45 @@ class GameState:
             
             # Находим доступные юниты для атаки
             available_units = [unit for unit in self.bot_faction.units if not unit.is_attacked]
+            
             if available_units and len(self.player_faction.units) > 0:
-                # Выбираем юнит с наибольшей атакой
-                best_attack_unit = max(available_units, key=lambda unit: unit.attack)
+                # Проверяем для каждого юнита, находится ли противник в зоне досягаемости
+                units_in_range = []
                 
-                # Находим ближайшего противника к этому юниту
-                closest_enemies = []
-                for player_unit in self.player_faction.units:
-                    # Вычисляем расстояние в клетках
-                    dx = abs(best_attack_unit.rect.x - player_unit.rect.x) // self.grid_size
-                    dy = abs(best_attack_unit.rect.y - player_unit.rect.y) // self.grid_size
-                    dist = dx + dy  # Manhattan distance
+                for bot_unit in available_units:
+                    for player_unit in self.player_faction.units:
+                        bot_x = bot_unit.rect.x // self.grid_size
+                        bot_y = bot_unit.rect.y // self.grid_size
+                        player_x = player_unit.rect.x // self.grid_size
+                        player_y = player_unit.rect.y // self.grid_size
+                        
+                        # Расстояние в клетках (Манхэттенская метрика)
+                        distance = abs(bot_x - player_x) + abs(bot_y - player_y)
+                        
+                        if distance <= bot_unit.attack_range:
+                            units_in_range.append((bot_unit, player_unit, distance, bot_unit.attack))
+                
+                # Если есть юниты, которые могут атаковать
+                if units_in_range:
+                    # Сортируем по атаке (сначала наиболее сильные)
+                    units_in_range.sort(key=lambda x: (-x[3], x[2]))  # -атака (чтобы сначала шли большие значения), затем расстояние
                     
-                    # Проверяем, находится ли противник в зоне атаки
-                    if dist <= best_attack_unit.attack_range:
-                        closest_enemies.append((player_unit, dist, player_unit.health))
-                
-                # Сортируем противников по здоровью (атакуем самых слабых)
-                closest_enemies.sort(key=lambda x: (x[1], x[2]))
-                
-                if closest_enemies:
-                    target_unit = closest_enemies[0][0]
+                    best_attack_unit, target_unit, attack_distance, _ = units_in_range[0]
+                    
                     if self.action_menu:
-                        self.action_menu.add_to_log(f"Выбран {best_attack_unit.unit_type} для атаки {target_unit.unit_type}")
+                        self.action_menu.add_to_log(f"Выбран {best_attack_unit.unit_type} для атаки {target_unit.unit_type} с расстояния {attack_distance}")
+                    
+                    # Передаем конкретную цель для атаки
                     self.process_bot_attack(best_attack_unit, [target_unit])
+                else:
+                    # Если никто не может атаковать, выбираем юнит с наибольшей атакой
+                    best_attack_unit = max(available_units, key=lambda unit: unit.attack)
+                    
+                    if self.action_menu:
+                        self.action_menu.add_to_log(f"Выбран {best_attack_unit.unit_type} для атаки, но нет целей в досягаемости")
+                    
+                    # Передаем все юниты игрока для проверки атаки
+                    self.process_bot_attack(best_attack_unit, self.player_faction.units)
     
     def apply_morale_effects(self, dice_roll):
         # Morale effects (for example, could affect defense)
